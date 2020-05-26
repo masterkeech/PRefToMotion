@@ -185,9 +185,11 @@ public:
                 _rebuild = true;
             }
 
-            ChannelSet out_channels = input(0)->info().channels();
+            ChannelSet out_channels = info_.channels();
             out_channels += Mask_UV;
+            // set the out channels to include uv and make sure to turn them on
             set_out_channels(out_channels);
+            info_.turn_on( Mask_UV );
 
             // check to make sure we're using the correct channels
             if (!(_channels & info_.channels()) || _channels.empty())
@@ -204,8 +206,8 @@ public:
 #endif
         if (Iop *iop = input(0))
         {
-            ChannelSet in_channels = _channels;
-            in_channels += channels;
+            ChannelSet in_channels = channels;
+            in_channels += _channels;
             iop->request(x, y, r, t, in_channels, count);
 
             // request the whole source frame and only the _channels
@@ -276,8 +278,8 @@ public:
                 auto finish_time = std::chrono::high_resolution_clock::now();
                 std::cout << "--------------- kd tree ---------------" << std::endl;
                 std::cout << "           bbox: " << source_info.x() << ", " << source_info.y() << ", " << source_info.r() << ", " << source_info.t() << std::endl;
-                std::cout << "output channels: " << channels << std::endl;
-                std::cout << "  pref channels: " << _channels << std::endl;
+                std::cout << "       channels: " << channels << std::endl;
+                std::cout << "  PRef channels: " << _channels << std::endl;
                 std::cout << "     num points: " << _point_cloud.pts.size() << std::endl;
                 std::cout << "        samples: " << _samples << std::endl;
                 std::cout << "   source frame: " << _source_frame << std::endl;

@@ -122,6 +122,14 @@ ScanlineRender {
  xpos 85
  ypos 35
 }
+Remove {
+ operation keep
+ channels rgba
+ name Remove1
+ selected true
+ xpos 85
+ ypos 176
+}
 PRefToMotion {
  source_frame 1
  name PRefToMotion1
