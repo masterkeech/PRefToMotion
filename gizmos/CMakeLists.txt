@@ -1,0 +1,1 @@
+install(FILES PRefMotionWarp.gizmo DESTINATION ${CMAKE_INSTALL_PREFIX})

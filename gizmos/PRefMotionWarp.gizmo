@@ -1,0 +1,50 @@
+Gizmo {
+ name AOVMotionWarp1
+ addUserKnob {20 AOVMotionWarp}
+ addUserKnob {41 channels T AOVMotion1.channels}
+ addUserKnob {41 source_frame l "source frame" T AOVMotion1.source_frame}
+ addUserKnob {41 samples T AOVMotion1.samples}
+}
+ Input {
+  inputs 0
+  name aov
+  xpos 0
+ }
+ PRefToMotion {
+  channels rgba
+  source_frame 1
+  name AOVMotion1
+  xpos 0
+  ypos 136
+ }
+ Input {
+  inputs 0
+  name to_warp
+  xpos 209
+  ypos -2
+  number 1
+ }
+ ShuffleCopy {
+  inputs 2
+  in forward
+  red red
+  green green
+  blue blue
+  out forward
+  name ShuffleCopy1
+  xpos 209
+  ypos 136
+ }
+ IDistort {
+  uv forward
+  name IDistort1
+  selected true
+  xpos 209
+  ypos 160
+ }
+ Output {
+  name Output1
+  xpos 209
+  ypos 290
+ }
+end_group
