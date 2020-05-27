@@ -48,6 +48,8 @@
 #include <chrono>
 #include <iostream>
 
+#define APPROX_ZERO 0.00000001
+
 static const char* CLASS = "PRefToMotion";
 
 using namespace nanoflann;
@@ -59,7 +61,7 @@ struct PointCloud
     struct Point
     {
         T  x, y, z;
-        int  pos_x, pos_y;
+        T  pos_x, pos_y;
     };
 
     std::vector<Point>  pts;
@@ -129,7 +131,7 @@ public:
 
     const char *node_help() const
     {
-        return "i convert a pref or similar pass to a backwards mapping that can be used with an iDistort, say what?.\n"
+        return "i convert a pref or similar pass to a backwards mapping that can be used with an stmap, say what?.\n"
                "yeah, it's true, and to do this all i have to use is a 3 dimensional kd-tree to find the nearest neighbours from a source frame.\n"
                "and i output the resulting motion as a uv channel which can be used to warp the image to match cg pass.";
     }
@@ -263,7 +265,7 @@ public:
                             // only add non-zero values into the point cloud for speed
                             if (values[0] != 0.0f || values[1] != 0.0f || values[2] != 0.0f)
                             {
-                                PointCloud<float>::Point pt = {values[0], values[1], values[2], tx, ty};
+                                PointCloud<float>::Point pt = {values[0], values[1], values[2], (float)tx + 0.5f, (float)ty + 0.5f};
                                 _point_cloud.pts.push_back(pt);
                             }
                         }
@@ -301,9 +303,7 @@ public:
         // pass through all the channels except for uv which we will be calculating
         foreach(z, channels)
         {
-            const float* incoming = row[z] + x;
-            float* outgoing = outrow.writable(z) + x;
-            memcpy(outgoing, incoming, (r-x) * sizeof(float));
+            outrow.copy(row, z, x, r);
         }
 
         if (aborted())
@@ -331,7 +331,7 @@ public:
             // check to see if the channel has an alpha / w to use as a mask
             if (_channels.size() != 4 || row[_channels.last()][xx] != 0.0f)
             {
-                // create a new result set that will return the distanch and index to the returned samples
+                // create a new result set that will return the distance and index to the returned samples
                 nanoflann::KNNResultSet<float> resultSet(_samples);
                 resultSet.init(&ret_index[0], &out_dist_sqr[0]);
 
@@ -341,22 +341,19 @@ public:
                 float total_weights = 0.0f;
                 for (unsigned int i = 0; i < resultSet.size(); ++i)
                 {
-                    total_weights += (1.0f / out_dist_sqr[i]);
+                    total_weights += 1.0f / std::max<float>(out_dist_sqr[i], APPROX_ZERO);
                 }
-                float weight_thus_far = 0.0f;
-                for (int i = resultSet.size() - 1; i >= 0; --i)
+                for (unsigned int i = 0; i < resultSet.size(); ++i)
                 {
-                    float weight = i == 0 ? 1.0f - weight_thus_far : 1.0f / out_dist_sqr[i] / total_weights;
-                    u += weight * (float) _point_cloud.pts[ret_index[i]].pos_x;
-                    v += weight * (float) _point_cloud.pts[ret_index[i]].pos_y;
-                    weight_thus_far += weight;
+                    float weight = 1.0f / (std::max<float>(out_dist_sqr[i], APPROX_ZERO) * total_weights);
+                    u += weight * _point_cloud.pts[ret_index[i]].pos_x;
+                    v += weight * _point_cloud.pts[ret_index[i]].pos_y;
                 }
             }
 
             // now that we have the weight average of the incoming uv, calculate the vector from
-            // the current frame to source frame
-            *(outrow.writable( Chan_U ) + xx) = u - (float)xx;
-            *(outrow.writable( Chan_V ) + xx) = v - (float)y;
+            *(outrow.writable( Chan_U ) + xx) = u / format().width();
+            *(outrow.writable( Chan_V ) + xx) = v / format().height();
         }
     }
 
@@ -364,4 +361,4 @@ public:
 };
 
 static Op* build(Node* node) { return new PRefToMotion(node); }
-const Op::Description PRefToMotion::d(::CLASS, "PRefToMotion", build);
+const Op::Description PRefToMotion::d(::CLASS, "Transform/PRefToMotion", build);

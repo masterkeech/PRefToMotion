@@ -1,21 +1,30 @@
 Gizmo {
+ inputs 2
  name AOVMotionWarp1
  addUserKnob {20 AOVMotionWarp}
- addUserKnob {41 channels T AOVMotion1.channels}
- addUserKnob {41 source_frame l "source frame" T AOVMotion1.source_frame}
- addUserKnob {41 samples T AOVMotion1.samples}
+ addUserKnob {41 channels T STMap1.channels}
+ addUserKnob {41 pref_channels l "pref channels" T PRefToMotion.channels}
+ addUserKnob {41 source_frame l "source frame" T PRefToMotion.source_frame}
+ addUserKnob {41 samples -STARTLINE T PRefToMotion.samples}
+ addUserKnob {6 unpremult t "unpremult the pref aov by rgba.alpha" -STARTLINE}
 }
  Input {
   inputs 0
-  name aov
+  name pref
   xpos 0
  }
- PRefToMotion {
-  channels rgba
-  source_frame 1
-  name AOVMotion1
+ Unpremult {
+  channels {{{PRefToMotion.channels}}}
+  name Unpremult1
   xpos 0
-  ypos 136
+  ypos 65
+  disable {{!parent.unpremult}}
+ }
+ PRefToMotion {
+  source_frame 1
+  name PRefToMotion
+  xpos 0
+  ypos 121
  }
  Input {
   inputs 0
@@ -24,23 +33,12 @@ Gizmo {
   ypos -2
   number 1
  }
- ShuffleCopy {
+ STMap {
   inputs 2
-  in forward
-  red red
-  green green
-  blue blue
-  out forward
-  name ShuffleCopy1
+  uv motion
+  name STMap1
   xpos 209
-  ypos 136
- }
- IDistort {
-  uv forward
-  name IDistort1
-  selected true
-  xpos 209
-  ypos 160
+  ypos 117
  }
  Output {
   name Output1
