@@ -50,21 +50,21 @@
 
 #define APPROX_ZERO 0.00000001
 
-static const char* CLASS = "PRefToMotion";
+static const char *CLASS = "PRefToMotion";
 
 using namespace nanoflann;
 using namespace DD::Image;
 
-template <typename T>
+template<typename T>
 struct PointCloud
 {
     struct Point
     {
-        T  x, y, z;
-        T  pos_x, pos_y;
+        T x, y, z;
+        T pos_x, pos_y;
     };
 
-    std::vector<Point>  pts;
+    std::vector<Point> pts;
 
     // Must return the number of data points
     inline size_t kdtree_get_point_count() const { return pts.size(); }
@@ -82,10 +82,11 @@ struct PointCloud
     // Optional bounding-box computation: return false to default to a standard bbox computation loop.
     //   Return true if the BBOX was already computed by the class and returned in "bb" so it can be avoided to redo it again.
     //   Look at bb.size() to find out the expected dimensionality (e.g. 2 or 3 for point clouds)
-    template <class BBOX>
-    bool kdtree_get_bbox(BBOX& /* bb */) const { return false; }
-
+    template<class BBOX>
+    bool kdtree_get_bbox(BBOX & /* bb */) const { return false; }
 };
+
+const char *modes[] = {"stmap", "uvmap", nullptr};
 
 
 typedef KDTreeSingleIndexAdaptor<
@@ -97,6 +98,8 @@ typedef KDTreeSingleIndexAdaptor<
 
 class PRefToMotion : public Iop {
     ChannelSet _channels;
+    Channel _out_channels[2];
+    int _mode;
     int _samples;
     U64 _source_hash;
     int _source_frame;
@@ -107,18 +110,22 @@ class PRefToMotion : public Iop {
     PointCloud<float> _point_cloud;
 
 public:
-    PRefToMotion(Node* node) : Iop(node), _channels(Mask_RGB), _samples(3), _source_hash(0x0), _rebuild(true)  {
-        _source_frame = (int)outputContext().frame();
+    PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mode(0), _samples(3), _source_hash(0x0), _rebuild(true)
+    {
+        _source_frame = (int) outputContext().frame();
+        _out_channels[0] = Chan_U;
+        _out_channels[1] = Chan_V;
     }
 
     int maximum_inputs() const { return 1; }
+
     int minimum_inputs() const { return 1; }
 
     /// split the inputs so that we have a target frame and a source frame
     int split_input(int n) const { return 2; }
 
     /// The time for image input n :-
-    const OutputContext& inputContext(int i, int n, OutputContext& context) const
+    const OutputContext &inputContext(int i, int n, OutputContext &context) const
     {
         context = outputContext();
         if (n == 1)
@@ -131,9 +138,9 @@ public:
 
     const char *node_help() const
     {
-        return "i convert a pref or similar pass to a backwards mapping that can be used with an stmap, say what?.\n"
+        return "i convert a pref or similar pass to a backwards mapping that can be used with an stmap or idistort, say what?.\n"
                "yeah, it's true, and to do this all i have to use is a 3 dimensional kd-tree to find the nearest neighbours from a source frame.\n"
-               "and i output the resulting motion as a uv channel which can be used to warp the image to match cg pass.";
+               "and i output the resulting motion as either a st or a uv channel which can be used to warp the image onto a cg pass.";
     }
 
     const char *Class() const
@@ -143,21 +150,31 @@ public:
 
     void knobs(Knob_Callback f)
     {
-        Input_ChannelSet_knob(f, &_channels, 0, "channels", "channels");
-        Tooltip(f, "Channels used to calculate the motion vectors from, the optional 4th channel being used as a mask.");
+        Input_ChannelSet_knob(f, &_channels, 0, "channels", "pref channels");
+        Tooltip(f, "Channels to calculate the motion vectors from, the optional 4th channel is used as a mask.");
+
+        Channel_knob(f, _out_channels, 2, "uv_channels", "uv channels");
+        Tooltip(f, "Channels to store the uv data that is being generated.");
+
         Int_knob(f, &_source_frame, "source_frame", "source frame");
         Tooltip(f, "Source frame to calculate the motion vectors from.");
-        // this is a must for being able to query the source frame from the input context
+        // this is needed so that we can query the source frame from the input context
         SetFlags(f, Knob::EARLY_STORE);
+
         Int_knob(f, &_samples, "samples");
-        Tooltip(f, "Number of neighbouring samples used to calculate motion vectors using a squared distance weighted average.");
+        Tooltip(f, "Number of neighbouring samples used to calculate motion using a squared distance weighted average.");
         SetRange(f, 1, 16);
+        ClearFlags(f, Knob::STARTLINE);
+
+        Enumeration_knob(f, &_mode, modes, "mode");
+        Tooltip(f, "Generate the motion as either st (normalised) or uv (vectors)");
+        ClearFlags(f, Knob::STARTLINE);
     }
 
-    int knob_changed(Knob* k)
+    int knob_changed(Knob *k)
     {
         // reset the kd tree if the channels or source frame used to calculate the motion vectors from change
-        if (k && (k->name() == "channels" || k->name() == "source_frame"))
+        if (k && (k->is("channels") || k->is("source_frame") ))
         {
             _kd_tree_ptr.reset();
             _rebuild = true;
@@ -187,11 +204,15 @@ public:
                 _rebuild = true;
             }
 
+            // create the uv channel set
+            ChannelSet uv_channels(_out_channels[0]);
+            uv_channels += _out_channels[1];
+
             ChannelSet out_channels = info_.channels();
-            out_channels += Mask_UV;
+            out_channels += uv_channels;
             // set the out channels to include uv and make sure to turn them on
             set_out_channels(out_channels);
-            info_.turn_on( Mask_UV );
+            info_.turn_on(uv_channels);
 
             // check to make sure we're using the correct channels
             if (!(_channels & info_.channels()) || _channels.empty())
@@ -218,7 +239,7 @@ public:
         }
     }
 
-    void engine (int y, int x, int r, ChannelMask channels, Row& outrow)
+    void engine(int y, int x, int r, ChannelMask channels, Row &outrow)
     {
         if (!input(0) || aborted())
         {
@@ -238,7 +259,7 @@ public:
                 // grab the data from input1 which is at _source_frame
                 Info source_info = input(1)->info();
 
-                Tile tile(*input(0, 1), source_info.x(), source_info.y(), source_info.r(), source_info.t(), _channels, false);
+                Tile tile(*input(0, 1), source_info.x(), source_info.y(), source_info.r(), source_info.t(), _channels, true);
 
                 if (aborted())
                 {
@@ -265,7 +286,7 @@ public:
                             // only add non-zero values into the point cloud for speed
                             if (values[0] != 0.0f || values[1] != 0.0f || values[2] != 0.0f)
                             {
-                                PointCloud<float>::Point pt = {values[0], values[1], values[2], (float)tx + 0.5f, (float)ty + 0.5f};
+                                PointCloud<float>::Point pt = {values[0], values[1], values[2], (float) tx + 0.5f, (float) ty + 0.5f};
                                 _point_cloud.pts.push_back(pt);
                             }
                         }
@@ -285,7 +306,7 @@ public:
                 std::cout << "     num points: " << _point_cloud.pts.size() << std::endl;
                 std::cout << "        samples: " << _samples << std::endl;
                 std::cout << "   source frame: " << _source_frame << std::endl;
-                std::cout << "  current frame: " << (int)outputContext().frame() << std::endl;
+                std::cout << "  current frame: " << (int) outputContext().frame() << std::endl;
                 std::cout << "--------------- timing ---------------" << std::endl;
                 std::cout << "     query time: " << std::chrono::duration_cast<std::chrono::milliseconds>(build_time - start_time).count() << " ms" << std::endl;
                 std::cout << "     build time: " << std::chrono::duration_cast<std::chrono::milliseconds>(finish_time - build_time).count() << " ms" << std::endl;
@@ -352,13 +373,14 @@ public:
             }
 
             // now that we have the weight average of the incoming uv, calculate the vector from
-            *(outrow.writable( Chan_U ) + xx) = u / format().width();
-            *(outrow.writable( Chan_V ) + xx) = v / format().height();
+            *(outrow.writable(_out_channels[0]) + xx) = _mode == 0 ? u / (float) format().width() : u - (float) xx;
+            *(outrow.writable(_out_channels[1]) + xx) = _mode == 0 ? v / (float) format().height() : v - (float) y;
         }
     }
 
     static const Description d;
 };
 
-static Op* build(Node* node) { return new PRefToMotion(node); }
+static Op *build(Node *node) { return new PRefToMotion(node); }
+
 const Op::Description PRefToMotion::d(::CLASS, "Transform/PRefToMotion", build);
