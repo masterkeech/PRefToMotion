@@ -86,7 +86,7 @@ struct PointCloud
     bool kdtree_get_bbox(BBOX & /* bb */) const { return false; }
 };
 
-const char *modes[] = {"stmap", "uvmap", nullptr};
+const char *modes[] = {"stmap", "uvmap", "pixel", nullptr};
 
 
 typedef KDTreeSingleIndexAdaptor<
@@ -167,7 +167,8 @@ public:
         ClearFlags(f, Knob::STARTLINE);
 
         Enumeration_knob(f, &_mode, modes, "mode");
-        Tooltip(f, "Generate the motion as either st (normalised) or uv (vectors)");
+        Tooltip(f, "Generate the motion as either:\n  - st map (normalised)\n"
+                   "  - uv map (vectors)\n  - pixels (source)");
         ClearFlags(f, Knob::STARTLINE);
     }
 
@@ -372,9 +373,23 @@ public:
                 }
             }
 
-            // now that we have the weight average of the incoming uv, calculate the vector from
-            *(outrow.writable(_out_channels[0]) + xx) = _mode == 0 ? u / (float) format().width() : u - (float) xx;
-            *(outrow.writable(_out_channels[1]) + xx) = _mode == 0 ? v / (float) format().height() : v - (float) y;
+            // calculate the correct u,v based on the mode
+            if (_mode == 0)
+            {
+                // stmap
+                u = u / (float) format().width();
+                v = v / (float) format().height();
+            }
+            else if (_mode == 1)
+            {
+                // uvmap
+                u = u - (float) xx;
+                v =  v - (float) y;
+            }
+
+            // set the final uv values of the outrow
+            *(outrow.writable(_out_channels[0]) + xx) = u;
+            *(outrow.writable(_out_channels[1]) + xx) = v;
         }
     }
 
