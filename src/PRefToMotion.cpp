@@ -110,9 +110,8 @@ class PRefToMotion : public Iop {
     PointCloud<float> _point_cloud;
 
 public:
-    PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mode(0), _samples(3), _source_hash(0x0), _rebuild(true)
+    PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mode(0), _samples(3), _source_hash(0x0), _source_frame(1001), _rebuild(true)
     {
-        _source_frame = (int) outputContext().frame();
         _out_channels[0] = Chan_U;
         _out_channels[1] = Chan_V;
     }

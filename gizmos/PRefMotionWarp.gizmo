@@ -1,7 +1,7 @@
 Gizmo {
  inputs 2
- name AOVMotionWarp1
- addUserKnob {20 AOVMotionWarp}
+ name PRefToMotion
+ addUserKnob {20 PRefToMotion}
  addUserKnob {41 channels T STMap1.channels}
  addUserKnob {41 pref_channels l "pref channels" T PRefToMotion.channels}
  addUserKnob {41 source_frame l "source frame" T PRefToMotion.source_frame}

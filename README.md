@@ -1,16 +1,16 @@
 # PRefToMotion
-C++ plugin for Foundry's Nuke software that calculates the motion vectors from a source frame to the current frame using a position reference pass or similar. It uses the [nanoflann](https://github.com/jlblancoc/nanoflann) kd-tree library under the hood to do a nearest neighbour lookup using the xyz value of the supplied channel.
+C++ plugin for Foundry's Nuke software that calculates the motion vectors from a source frame to the current frame using a position reference pass or similar. It uses the [nanoflann](https://github.com/jlblancoc/nanoflann) kd-tree library under the hood to do a nearest neighbour lookup using the xyz value of the supplied pref channel.
 
 | ![alt text](examples/PRefToMotion_example.png "example of a single keyed frame being warped using a position reference map") |
 | --- |
-| **example image** of a smiley face drawn at frame 1 and warped to 5, 10 and 15 using a position reference pass |
+| **example image** a smiley face drawn at frame 1 and warped to 5, 10 and 15 using a position reference pass |
 
 
 # build
 
 Set the NUKE_VERSION CMake variable to the version of Nuke you wish to compile against, eg. 11.3v6 (tested version), assuming standard installation. Then it's just standard cmake build and make install commands for generation of the Nuke plugin.
 
-- cmake /path/to/PRefToMotion/ -DCMAKE_INSTALL_PREFIX=~/.nuke -DCMAKE_BUILD_TYPE=DEBUG
+- cmake /path/to/PRefToMotion/ -DNUKE_VERSION=11.3v6 -DCMAKE_INSTALL_PREFIX=~/.nuke -DCMAKE_BUILD_TYPE=DEBUG
 - make install
 
 # usage
@@ -18,10 +18,11 @@ PRefToMotion(.dylib|.so) should now be built and installed into your user's .nuk
 
 # parameters
 very simple list of parameters to interact with so far, the are:
-- **channels**: the channels that hold the xyz pref of similar data, if a 4th channel is supplied it will be used as a mask.
-- **source frame**: the source frame to calculate the motion vectors from.
-- **samples**: the number of nearest neighbours to look up, used to calculate a weighted average from the squared distance to the lookup point.
-
+- **pref channels**: channels that hold the xyz pref of similar data, if a 4th channel is supplied it will be used as a mask.
+- **uv channels**: channels to store the uv data that is being generated
+- **source frame**: source frame to calculate the motion vectors from.
+- **samples**: number of nearest neighbours to look up, used to calculate a weighted average from the squared distance to the lookup point.
+- **modes**: generates the motion as either an st map (normalised), uv map (vectors) or as the source pixels.
 # speed
 building the indices and querying a kd-tree with more than a million points can tend to be slow, optimisations forth coming.
 

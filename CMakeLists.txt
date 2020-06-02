@@ -2,7 +2,9 @@ cmake_minimum_required(VERSION 3.11)
 
 project(PRefToMotion)
 
-set(NUKE_VERSION 11.3v6)
+if (NOT DEFINED NUKE_VERSION)
+    set(NUKE_VERSION 11.3v6)
+endif()
 
 set(CMAKE_CXX_STANDARD 11)
 
