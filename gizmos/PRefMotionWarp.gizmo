@@ -1,12 +1,13 @@
 Gizmo {
  inputs 2
- name PRefToMotion
- addUserKnob {20 PRefToMotion}
+ name PRefToMotionWarp
+ addUserKnob {20 PRefToMotionWarp}
  addUserKnob {41 channels T STMap1.channels}
  addUserKnob {41 pref_channels l "pref channels" T PRefToMotion.channels}
+ addUserKnob {41 pref_mask l "pref mask" T PRefToMotion.mask}
  addUserKnob {41 source_frame l "source frame" T PRefToMotion.source_frame}
  addUserKnob {41 samples -STARTLINE T PRefToMotion.samples}
- addUserKnob {6 unpremult t "unpremult the pref aov by rgba.alpha" -STARTLINE}
+ addUserKnob {6 unpremult t "unpremult the pref aov by the mask" -STARTLINE}
 }
  Input {
   inputs 0
@@ -15,6 +16,7 @@ Gizmo {
  }
  Unpremult {
   channels {{{PRefToMotion.channels}}}
+  alpha {{{PRefToMotion.mask}}}
   name Unpremult1
   xpos 0
   ypos 65
@@ -22,6 +24,7 @@ Gizmo {
  }
  PRefToMotion {
   source_frame 1
+  mask rgba.alpha
   name PRefToMotion
   xpos 0
   ypos 121

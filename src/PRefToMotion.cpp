@@ -98,7 +98,9 @@ typedef KDTreeSingleIndexAdaptor<
 
 class PRefToMotion : public Iop {
     ChannelSet _channels;
+    Channel _mask_channel;
     Channel _out_channels[2];
+
     int _mode;
     int _samples;
     U64 _source_hash;
@@ -110,15 +112,19 @@ class PRefToMotion : public Iop {
     PointCloud<float> _point_cloud;
 
 public:
-    PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mode(0), _samples(3), _source_hash(0x0), _source_frame(1001), _rebuild(true)
+    PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mask_channel(Chan_Black), _mode(0), _samples(3), _source_hash(0x0), _source_frame(1001), _rebuild(true)
     {
         _out_channels[0] = Chan_U;
         _out_channels[1] = Chan_V;
     }
 
-    int maximum_inputs() const { return 1; }
+    int maximum_inputs() const { return 2; }
 
-    int minimum_inputs() const { return 1; }
+    int minimum_inputs() const { return 2; }
+
+    int optional_input() const { return 1; }
+
+    const char* input_label(int input, char*) const { return input == 0 ? "" : "mask"; }
 
     /// split the inputs so that we have a target frame and a source frame
     int split_input(int n) const { return 2; }
@@ -155,6 +161,9 @@ public:
         Channel_knob(f, _out_channels, 2, "uv_channels", "uv channels");
         Tooltip(f, "Channels to store the uv data that is being generated.");
 
+        Channel_knob(f, &_mask_channel, 1, "mask");
+        Tooltip(f, "Channel to use as a mask");
+
         Int_knob(f, &_source_frame, "source_frame", "source frame");
         Tooltip(f, "Source frame to calculate the motion vectors from.");
         // this is needed so that we can query the source frame from the input context
@@ -174,7 +183,7 @@ public:
     int knob_changed(Knob *k)
     {
         // reset the kd tree if the channels or source frame used to calculate the motion vectors from change
-        if (k && (k->is("channels") || k->is("source_frame") ))
+        if (k && (k->is("channels") || k->is("source_frame") || k->is("mask") ))
         {
             _kd_tree_ptr.reset();
             _rebuild = true;
@@ -195,6 +204,7 @@ public:
 
             // validate the input at time _source_frame
             input(0, 1)->force_validate(true);
+
             // check the input at the source frame to see if it's changed and requires an update
             U64 hash = input(0, 1)->hash().value();
             if (hash != _source_hash)
@@ -214,8 +224,18 @@ public:
             set_out_channels(out_channels);
             info_.turn_on(uv_channels);
 
+            ChannelSet input_mask_channels = info_.channels();
+            if (input(1))
+            {
+                input(1)->validate(for_real);
+                input_mask_channels = input(1)->channels();
+
+                // validate the input at time _source_frame
+                input(1, 1)->force_validate(true);
+            }
+
             // check to make sure we're using the correct channels
-            if (!(_channels & info_.channels()) || _channels.empty())
+            if (!(_channels & info_.channels()) || (_mask_channel != Chan_Black && !(ChannelSet(_mask_channel) & input_mask_channels)) || _channels.empty())
             {
                 set_out_channels(Mask_None);
             }
@@ -231,11 +251,24 @@ public:
         {
             ChannelSet in_channels = channels;
             in_channels += _channels;
+
+            // check to see if we're using a mask
+            if (_mask_channel != Chan_Black && !input(1))
+            {
+                in_channels += _channels;
+            }
+
             iop->request(x, y, r, t, in_channels, count);
 
             // request the whole source frame and only the _channels
             Info source_info = input(0, 1)->info();
-            input(0, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(), _channels, count);
+            ChannelSet source_channels = _mask_channel != Chan_Black && !input(1) ? _channels + _mask_channel : _channels;
+            input(0, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(), source_channels, count);
+            if (_mask_channel != Chan_Black && input(1))
+            {
+                input(1)->request(x, y, r, t, ChannelSet(_mask_channel), count);
+                input(1, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(), ChannelSet(_mask_channel), count);
+            }
         }
     }
 
@@ -245,6 +278,10 @@ public:
         {
             return;
         }
+
+        // check to see if the input 1 has the mask channel, if so we're using that
+        ChannelSet mask_Channel(_mask_channel);
+        int mask_input = input(1, 0) && input(1, 0)->channels() & mask_Channel ? 1 : 0;
 
         // check to see if the kd tree has been reset and needs the index to be rebuilt
         if (_rebuild)
@@ -266,6 +303,13 @@ public:
                     return;
                 }
 
+                Tile mask_tile(*input(mask_input, 1), source_info.x(), source_info.y(), source_info.r(), source_info.t(), mask_Channel, true);
+
+                if (aborted())
+                {
+                    return;
+                }
+
                 // clear the point cloud and reserve the memory to a quarter of the size to avoid vector resizing
                 _point_cloud.pts.reserve(((source_info.r() - source_info.x()) * (source_info.t() - source_info.y())) / 4);
 
@@ -274,8 +318,8 @@ public:
                 {
                     for (int tx = source_info.x(); tx < source_info.r(); ++tx)
                     {
-                        // if we have a fourth channel then use it as a mask
-                        if (_channels.size() != 4 || *(tile[_channels.last()][ty] + tx) != 0.0f)
+                        // check to see if we're using the mask channel
+                        if (_mask_channel == Chan_Black || *(mask_tile[_mask_channel][ty] + tx) != 0.0f)
                         {
                             float values[3] = {0.0f, 0.0f, 0.0f};
                             Channel z = _channels.first();
@@ -303,6 +347,7 @@ public:
                 std::cout << "           bbox: " << source_info.x() << ", " << source_info.y() << ", " << source_info.r() << ", " << source_info.t() << std::endl;
                 std::cout << "       channels: " << channels << std::endl;
                 std::cout << "  PRef channels: " << _channels << std::endl;
+                std::cout << "   mask channel: " << mask_Channel << std::endl;
                 std::cout << "     num points: " << _point_cloud.pts.size() << std::endl;
                 std::cout << "        samples: " << _samples << std::endl;
                 std::cout << "   source frame: " << _source_frame << std::endl;
@@ -320,6 +365,9 @@ public:
         // grab our input row that we are going to read the channels and target channels from
         Row row(x, r);
         row.get(input0(), y, x, r, channels + _channels);
+
+        Row mask_row(x, r);
+        mask_row.get(*input(mask_input, 0), y, x, r, mask_Channel);
 
         // pass through all the channels except for uv which we will be calculating
         foreach(z, channels)
@@ -350,7 +398,7 @@ public:
             float u = 0.0f, v = 0.0f;
 
             // check to see if the channel has an alpha / w to use as a mask
-            if (_channels.size() != 4 || row[_channels.last()][xx] != 0.0f)
+            if (_mask_channel == Chan_Black || mask_row[_mask_channel][xx] != 0.0f)
             {
                 // create a new result set that will return the distance and index to the returned samples
                 nanoflann::KNNResultSet<float> resultSet(_samples);
