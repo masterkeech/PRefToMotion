@@ -44,7 +44,6 @@
 #include "DDImage/Tile.h"
 
 #include <nanoflann.hpp>
-#include <ctime>
 #include <chrono>
 #include <iostream>
 
@@ -95,6 +94,9 @@ typedef KDTreeSingleIndexAdaptor<
         3 /* dim */
 > my_kd_tree_t;
 
+typedef std::shared_ptr<my_kd_tree_t> my_kd_tree_t_ptr;
+typedef PointCloud<float> point_cloud_float;
+typedef std::shared_ptr<point_cloud_float> point_cloud_float_ptr;
 
 class PRefToMotion : public Iop {
     ChannelSet _channels;
@@ -108,29 +110,26 @@ class PRefToMotion : public Iop {
     bool _rebuild;
 
     Lock _lock;
-    std::shared_ptr<my_kd_tree_t> _kd_tree_ptr;
-    PointCloud<float> _point_cloud;
+    my_kd_tree_t_ptr _kd_tree_ptr;
+    point_cloud_float_ptr _point_cloud_ptr;
 
 public:
-    PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mask_channel(Chan_Black), _mode(0), _samples(3), _source_hash(0x0), _source_frame(1001), _rebuild(true)
-    {
-        _out_channels[0] = Chan_U;
-        _out_channels[1] = Chan_V;
-    }
+    explicit PRefToMotion(Node *node) : Iop(node), _channels(Mask_RGB), _mask_channel(Chan_Black), _mode(0), _samples(3), _source_hash(0x0), _source_frame(1001), _rebuild(true), _out_channels{Chan_U, Chan_V}
+    {}
 
-    int maximum_inputs() const { return 2; }
+    int maximum_inputs() const override { return 2; }
 
-    int minimum_inputs() const { return 2; }
+    int minimum_inputs() const override { return 2; }
 
-    int optional_input() const { return 1; }
+    int optional_input() const override { return 1; }
 
-    const char* input_label(int input, char*) const { return input == 0 ? "" : "mask"; }
+    const char* input_label(int input, char*) const override { return input == 0 ? "" : "mask"; }
 
     /// split the inputs so that we have a target frame and a source frame
-    int split_input(int n) const { return 2; }
+    int split_input(int n) const override { return 2; }
 
     /// The time for image input n :-
-    const OutputContext &inputContext(int i, int n, OutputContext &context) const
+    const OutputContext &inputContext(int i, int n, OutputContext &context) const override
     {
         context = outputContext();
         if (n == 1)
@@ -141,19 +140,19 @@ public:
         return context;
     }
 
-    const char *node_help() const
+    const char *node_help() const override
     {
         return "i convert a pref or similar pass to a backwards mapping that can be used with an stmap or idistort, say what?.\n"
                "yeah, it's true, and to do this all i have to use is a 3 dimensional kd-tree to find the nearest neighbours from a source frame.\n"
                "and i output the resulting motion as either a st or a uv channel which can be used to warp the image onto a cg pass.";
     }
 
-    const char *Class() const
+    const char *Class() const override
     {
         return CLASS;
     }
 
-    void knobs(Knob_Callback f)
+    void knobs(Knob_Callback f) override
     {
         Input_ChannelSet_knob(f, &_channels, 0, "channels", "pref channels");
         Tooltip(f, "Channels to calculate the motion vectors from, the optional 4th channel is used as a mask.");
@@ -180,7 +179,7 @@ public:
         ClearFlags(f, Knob::STARTLINE);
     }
 
-    int knob_changed(Knob *k)
+    int knob_changed(Knob *k) override
     {
         // reset the kd tree if the channels or source frame used to calculate the motion vectors from change
         if (k && (k->is("channels") || k->is("source_frame") || k->is("mask") ))
@@ -192,7 +191,7 @@ public:
         return Iop::knob_changed(k);
     }
 
-    void _validate(bool for_real)
+    void _validate(bool for_real) override
     {
 #ifndef NDEBUG
         std::cout << "_validate(" << for_real << ")" << std::endl;
@@ -200,7 +199,6 @@ public:
         if (input(0))
         {
             copy_info();
-            input(0)->validate(for_real);
 
             // validate the input at time _source_frame
             input(0, 1)->force_validate(true);
@@ -218,16 +216,24 @@ public:
             ChannelSet uv_channels(_out_channels[0]);
             uv_channels += _out_channels[1];
 
+            ChannelSet input_mask_channels = info_.channels();
+
             ChannelSet out_channels = info_.channels();
             out_channels += uv_channels;
+
             // set the out channels to include uv and make sure to turn them on
             set_out_channels(out_channels);
             info_.turn_on(uv_channels);
 
-            ChannelSet input_mask_channels = info_.channels();
+            // if we have an input1 than let's validate
             if (input(1))
             {
                 input(1)->validate(for_real);
+            }
+
+            // check to see if input1 truly is our first input, sometimes it's actually input0?
+            if (input(1) && Op::input(1) != default_input(1) && input(0)->firstOp() != input(1)->firstOp())
+            {
                 input_mask_channels = input(1)->channels();
 
                 // validate the input at time _source_frame
@@ -239,10 +245,12 @@ public:
             {
                 set_out_channels(Mask_None);
             }
+        } else {
+            set_out_channels(Mask_None);
         }
     }
 
-    void _request(int x, int y, int r, int t, ChannelMask channels, int count)
+    void _request(int x, int y, int r, int t, ChannelMask channels, int count) override
     {
 #ifndef NDEBUG
         std::cout << "_request(" << x << ", " << y << ", " << r << ", " << t << ", " << channels << ", " << count << ")" << std::endl;
@@ -250,29 +258,36 @@ public:
         if (Iop *iop = input(0))
         {
             ChannelSet in_channels = channels;
+            // we don't want to request the out channels, they are generated only
+            in_channels -= _out_channels[0];
+            in_channels -= _out_channels[1];
             in_channels += _channels;
 
-            // check to see if we're using a mask
-            if (_mask_channel != Chan_Black && !input(1))
+            // check to see if we're using a mask from input 0
+            bool use_input0 = !input(1) || Op::input(1) == default_input(1) || input(0)->firstOp() == input(1)->firstOp();
+            if (_mask_channel != Chan_Black && use_input0)
             {
-                in_channels += _channels;
+                in_channels += _mask_channel;
             }
 
             iop->request(x, y, r, t, in_channels, count);
 
             // request the whole source frame and only the _channels
             Info source_info = input(0, 1)->info();
-            ChannelSet source_channels = _mask_channel != Chan_Black && !input(1) ? _channels + _mask_channel : _channels;
-            input(0, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(), source_channels, count);
-            if (_mask_channel != Chan_Black && input(1))
+            ChannelSet source_channels = _mask_channel != Chan_Black && use_input0 ? _channels + _mask_channel : _channels;
+            input(0, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(),
+                                 source_channels, count);
+
+            if (_mask_channel != Chan_Black && !use_input0)
             {
                 input(1)->request(x, y, r, t, ChannelSet(_mask_channel), count);
-                input(1, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(), ChannelSet(_mask_channel), count);
+                input(1, 1)->request(source_info.x(), source_info.y(), source_info.r(), source_info.t(),
+                                     ChannelSet(_mask_channel), count);
             }
         }
     }
 
-    void engine(int y, int x, int r, ChannelMask channels, Row &outrow)
+    void engine(int y, int x, int r, ChannelMask channels, Row &outrow) override
     {
         if (!input(0) || aborted())
         {
@@ -292,7 +307,7 @@ public:
 #ifndef NDEBUG
                 auto start_time = std::chrono::high_resolution_clock::now();
 #endif
-                _point_cloud.pts.clear();
+                _point_cloud_ptr = std::make_shared<point_cloud_float>();
                 // grab the data from input1 which is at _source_frame
                 Info source_info = input(1)->info();
 
@@ -311,7 +326,7 @@ public:
                 }
 
                 // clear the point cloud and reserve the memory to a quarter of the size to avoid vector resizing
-                _point_cloud.pts.reserve(((source_info.r() - source_info.x()) * (source_info.t() - source_info.y())) / 4);
+                _point_cloud_ptr->pts.reserve(((source_info.r() - source_info.x()) * (source_info.t() - source_info.y())) / 4);
 
                 // loop through the whole tile to get the x,y,z values in order to generate the kd-tree
                 for (int ty = source_info.y(); ty < source_info.t(); ++ty)
@@ -323,7 +338,7 @@ public:
                         {
                             float values[3] = {0.0f, 0.0f, 0.0f};
                             Channel z = _channels.first();
-                            for (unsigned int i = 0; i < std::min<int>(_channels.size(), 3); ++i, z = _channels.next(z))
+                            for (unsigned int i = 0; i < std::min<unsigned int>(_channels.size(), 3); ++i, z = _channels.next(z))
                             {
                                 values[i] = tile[z][ty][tx];
                             }
@@ -331,7 +346,7 @@ public:
                             if (values[0] != 0.0f || values[1] != 0.0f || values[2] != 0.0f)
                             {
                                 PointCloud<float>::Point pt = {values[0], values[1], values[2], (float) tx + 0.5f, (float) ty + 0.5f};
-                                _point_cloud.pts.push_back(pt);
+                                _point_cloud_ptr->pts.push_back(pt);
                             }
                         }
                     }
@@ -339,7 +354,7 @@ public:
 #ifndef NDEBUG
                 auto build_time = std::chrono::high_resolution_clock::now();
 #endif
-                _kd_tree_ptr = std::make_shared<my_kd_tree_t>(3 /*dim*/, _point_cloud, KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
+                _kd_tree_ptr = std::make_shared<my_kd_tree_t>(3 /*dim*/, *_point_cloud_ptr, KDTreeSingleIndexAdaptorParams(10 /* max leaf */));
                 _kd_tree_ptr->buildIndex();
 #ifndef NDEBUG
                 auto finish_time = std::chrono::high_resolution_clock::now();
@@ -348,7 +363,7 @@ public:
                 std::cout << "       channels: " << channels << std::endl;
                 std::cout << "  PRef channels: " << _channels << std::endl;
                 std::cout << "   mask channel: " << mask_Channel << std::endl;
-                std::cout << "     num points: " << _point_cloud.pts.size() << std::endl;
+                std::cout << "     num points: " << _point_cloud_ptr->pts.size() << std::endl;
                 std::cout << "        samples: " << _samples << std::endl;
                 std::cout << "   source frame: " << _source_frame << std::endl;
                 std::cout << "  current frame: " << (int) outputContext().frame() << std::endl;
@@ -363,14 +378,19 @@ public:
         }
 
         // grab our input row that we are going to read the channels and target channels from
+        ChannelSet actual_channels = channels;
+        actual_channels -= _out_channels[0];
+        actual_channels -= _out_channels[1];
+
+        // grab our input row that we are going to read the channels and target channels from
         Row row(x, r);
-        row.get(input0(), y, x, r, channels + _channels);
+        row.get(input0(), y, x, r, actual_channels + _channels);
 
         Row mask_row(x, r);
         mask_row.get(*input(mask_input, 0), y, x, r, mask_Channel);
 
         // pass through all the channels except for uv which we will be calculating
-        foreach(z, channels)
+        foreach(z, actual_channels)
         {
             outrow.copy(row, z, x, r);
         }
@@ -389,7 +409,7 @@ public:
         {
             float query[3] = {0.0f, 0.0f, 0.0f};
             Channel z = _channels.first();
-            for (unsigned int i = 0; i < std::min<int>(_channels.size(), 3); ++i, z = _channels.next(z))
+            for (unsigned int i = 0; i < std::min<unsigned int>(_channels.size(), 3); ++i, z = _channels.next(z))
             {
                 query[i] = row[z][xx];
             }
@@ -415,8 +435,8 @@ public:
                 for (unsigned int i = 0; i < resultSet.size(); ++i)
                 {
                     float weight = 1.0f / (std::max<float>(out_dist_sqr[i], APPROX_ZERO) * total_weights);
-                    u += weight * _point_cloud.pts[ret_index[i]].pos_x;
-                    v += weight * _point_cloud.pts[ret_index[i]].pos_y;
+                    u += weight * _point_cloud_ptr->pts[ret_index[i]].pos_x;
+                    v += weight * _point_cloud_ptr->pts[ret_index[i]].pos_y;
                 }
             }
 
